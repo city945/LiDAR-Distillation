@@ -14,6 +14,8 @@ import torch.multiprocessing as mp
 def check_numpy_to_torch(x):
     if isinstance(x, np.ndarray):
         return torch.from_numpy(x).float(), True
+    if isinstance(x, np.float64) or isinstance(x, np.float32):
+        return torch.tensor([x]).float(), True
     return x, False
 
 
@@ -84,7 +86,8 @@ def get_voxel_centers(voxel_coords, downsample_times, voxel_size, point_cloud_ra
 def create_logger(log_file=None, rank=0, log_level=logging.INFO):
     logger = logging.getLogger(__name__)
     logger.setLevel(log_level if rank == 0 else 'ERROR')
-    formatter = logging.Formatter('%(asctime)s  %(levelname)5s  %(message)s')
+    formatter = logging.Formatter('[%(asctime)s  %(filename)s %(lineno)d '
+                                  '%(levelname)5s]  %(message)s')
     console = logging.StreamHandler()
     console.setLevel(log_level if rank == 0 else 'ERROR')
     console.setFormatter(formatter)
@@ -101,6 +104,8 @@ def set_random_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -189,7 +194,67 @@ def merge_results_dist(result_part, size, tmpdir):
 
     ordered_results = []
     for res in zip(*part_list):
-        ordered_results.extend(list(res))
+        ordered_results.extend(list(res)) 
     ordered_results = ordered_results[:size]
     shutil.rmtree(tmpdir)
     return ordered_results
+
+
+def add_prefix_to_dict(dict, prefix):
+    for key in list(dict.keys()):
+        dict[prefix + key] = dict.pop(key)
+    return dict
+
+
+class DataReader(object):
+    def __init__(self, dataloader, sampler):
+        self.dataloader = dataloader
+        self.sampler = sampler
+
+    def construct_iter(self):
+        self.dataloader_iter = iter(self.dataloader)
+
+    def set_cur_epoch(self, cur_epoch):
+        self.cur_epoch = cur_epoch
+
+    def read_data(self):
+        try:
+            return self.dataloader_iter.next()
+        except:
+            if self.sampler is not None:
+                self.sampler.set_epoch(self.cur_epoch)
+            self.construct_iter()
+            return self.dataloader_iter.next()
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def set_bn_train(m):
+    classname = m.__class__.__name__
+    if classname.find('BatchNorm') != -1:
+        m.train()
+
+
+def calculate_gradient_norm(model):
+    total_norm = 0
+    for p in model.parameters():
+        param_norm = p.grad.data.norm(2)
+        total_norm += param_norm.item() ** 2
+    total_norm = total_norm ** (1. / 2)
+    return total_norm

@@ -27,7 +27,12 @@ def model_fn_decorator():
 
     def model_func(model, batch_dict):
         load_data_to_gpu(batch_dict)
-        ret_dict, tb_dict, disp_dict = model(batch_dict)
+
+        if 'mimic' not in batch_dict.keys():
+            ret_dict, tb_dict, disp_dict = model(batch_dict)
+        else:
+            ret_dict, tb_dict, disp_dict, batch_new = model(batch_dict)
+
 
         loss = ret_dict['loss'].mean()
         if hasattr(model, 'update_global_step'):
@@ -35,6 +40,9 @@ def model_fn_decorator():
         else:
             model.module.update_global_step()
 
-        return ModelReturn(loss, tb_dict, disp_dict)
-
+        if 'mimic' not in batch_dict.keys():
+            return ModelReturn(loss, tb_dict, disp_dict)
+        else:
+            return ModelReturn(loss, tb_dict, disp_dict), batch_new
+            
     return model_func

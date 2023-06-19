@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import pdb
 
 
 class PointPillarScatter(nn.Module):
@@ -22,6 +23,7 @@ class PointPillarScatter(nn.Module):
                 dtype=pillar_features.dtype,
                 device=pillar_features.device)
 
+            
             batch_mask = coords[:, 0] == batch_idx
             this_coords = coords[batch_mask, :]
             indices = this_coords[:, 1] + this_coords[:, 2] * self.nx + this_coords[:, 3]

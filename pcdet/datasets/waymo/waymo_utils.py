@@ -1,7 +1,5 @@
 # OpenPCDet PyTorch Dataloader and Evaluation Tools for Waymo Open Dataset
-# Reference https://github.com/open-mmlab/OpenPCDet
-# Written by Shaoshuai Shi, Chaoxu Guo
-# All Rights Reserved 2019-2020.
+# Reference https://github.com/open-mmlab/OpenPCDet, https://github.com/CVMI-Lab/ST3D
 
 
 import os
@@ -11,6 +9,7 @@ from ...utils import common_utils
 import tensorflow as tf
 from waymo_open_dataset.utils import frame_utils, transform_utils, range_image_utils
 from waymo_open_dataset import dataset_pb2
+import pdb
 
 try:
     tf.enable_eager_execution()
@@ -83,6 +82,7 @@ def convert_range_image_to_point_cloud(frame, range_images, camera_projections, 
     points_NLZ = []
     points_intensity = []
     points_elongation = []
+    masks = []
 
     frame_pose = tf.convert_to_tensor(np.reshape(np.array(frame.pose.transform), [4, 4]))
     # [H, W, 6]
@@ -97,7 +97,7 @@ def convert_range_image_to_point_cloud(frame, range_images, camera_projections, 
     range_image_top_pose_tensor = transform_utils.get_transform(
         range_image_top_pose_tensor_rotation,
         range_image_top_pose_tensor_translation)
-    for c in calibrations:
+    for idx, c in enumerate(calibrations):
         range_image = range_images[c.name][ri_index]
         if len(c.beam_inclinations) == 0:  # pylint: disable=g-explicit-length-test
             beam_inclinations = range_image_utils.compute_inclination(
@@ -142,15 +142,34 @@ def convert_range_image_to_point_cloud(frame, range_images, camera_projections, 
         points_NLZ.append(points_NLZ_tensor.numpy())
         points_intensity.append(points_intensity_tensor.numpy())
         points_elongation.append(points_elongation_tensor.numpy())
+        
+        range_img_mask_np = range_image_mask.numpy()
+        mask = np.zeros((3, points_tensor.numpy().shape[0])).astype(np.int32)
+        x, y = np.meshgrid(np.arange(range_img_mask_np.shape[1]), np.arange(range_img_mask_np.shape[0]))
+        mask[0][:] = idx
+        mask_temp = np.zeros(range_img_mask_np.shape)
+        mask_temp[1::2] = 1
+        mask[1] = mask_temp[range_img_mask_np]
+        mask_temp = np.zeros(range_img_mask_np.shape)
+        for i in range(range_img_mask_np.shape[0]):
+            if i % 4 == 3:
+                temp = mask_temp[i][range_img_mask_np[i]]
+                temp[::2] = 1
+                mask_temp[i][range_img_mask_np[i]] = temp
+        mask[2] = mask_temp[range_img_mask_np]
+        mask = mask.transpose(1,0)
+        masks.append(mask)
+        
 
-    return points, cp_points, points_NLZ, points_intensity, points_elongation
+
+    return points, cp_points, points_NLZ, points_intensity, points_elongation, masks
 
 
-def save_lidar_points(frame, cur_save_path):
+def save_lidar_points(frame, save_path, sequence_name, cnt):
     range_images, camera_projections, range_image_top_pose = \
         frame_utils.parse_range_image_and_camera_projection(frame)
 
-    points, cp_points, points_in_NLZ_flag, points_intensity, points_elongation = \
+    points, cp_points, points_in_NLZ_flag, points_intensity, points_elongation, masks = \
         convert_range_image_to_point_cloud(frame, range_images, camera_projections, range_image_top_pose)
 
     # 3d points in vehicle frame.
@@ -163,13 +182,24 @@ def save_lidar_points(frame, cur_save_path):
     save_points = np.concatenate([
         points_all, points_intensity, points_elongation, points_in_NLZ_flag
     ], axis=-1).astype(np.float32)
-
+    save_mask = np.concatenate(masks, axis=0).astype(np.int32)
+    
+    cur_save_path = save_path / '64' / sequence_name / ('%04d.npy' % cnt)
     np.save(cur_save_path, save_points)
-    # print('saving to ', cur_save_path)
+
+    mask = (save_mask[:, 0] > 0) + (save_mask[:, 1] > 0)
+    cur_save_path = save_path / '32' / sequence_name / ('%04d.npy' % cnt)
+    np.save(cur_save_path, save_points[mask])
+
+    mask = (save_mask[:, 0] > 0) + (save_mask[:, 2] > 0)
+    cur_save_path = save_path / '16^' / sequence_name / ('%04d.npy' % cnt)
+    np.save(cur_save_path, save_points[mask])
+
     return num_points_of_each_lidar
 
 
 def process_single_sequence(sequence_file, save_path, sampled_interval, has_label=True):
+    sampling_modes = ['64', '32', '16^']
     sequence_name = os.path.splitext(os.path.basename(sequence_file))[0]
 
     # print('Load record (sampled_interval=%d): %s' % (sampled_interval, sequence_name))
@@ -178,9 +208,10 @@ def process_single_sequence(sequence_file, save_path, sampled_interval, has_labe
         return []
 
     dataset = tf.data.TFRecordDataset(str(sequence_file), compression_type='')
-    cur_save_dir = save_path / sequence_name
-    cur_save_dir.mkdir(parents=True, exist_ok=True)
-    pkl_file = cur_save_dir / ('%s.pkl' % sequence_name)
+    for mode in sampling_modes:
+        cur_save_dir = save_path / mode / sequence_name
+        cur_save_dir.mkdir(parents=True, exist_ok=True)
+    pkl_file = save_path / 'default' / sequence_name / ('%s.pkl' % sequence_name)
 
     sequence_infos = []
     if pkl_file.exists():
@@ -214,7 +245,7 @@ def process_single_sequence(sequence_file, save_path, sampled_interval, has_labe
             annotations = generate_labels(frame)
             info['annos'] = annotations
 
-        num_points_of_each_lidar = save_lidar_points(frame, cur_save_dir / ('%04d.npy' % cnt))
+        num_points_of_each_lidar = save_lidar_points(frame, save_path, sequence_name, cnt)
         info['num_points_of_each_lidar'] = num_points_of_each_lidar
 
         sequence_infos.append(info)
@@ -224,5 +255,4 @@ def process_single_sequence(sequence_file, save_path, sampled_interval, has_labe
 
     print('Infos are saved to (sampled_interval=%d): %s' % (sampled_interval, pkl_file))
     return sequence_infos
-
 

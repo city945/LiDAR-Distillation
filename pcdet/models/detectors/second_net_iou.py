@@ -20,10 +20,18 @@ class SECONDNetIoU(Detector3DTemplate):
             ret_dict = {
                 'loss': loss
             }
-            return ret_dict, tb_dict, disp_dict
+            if 'mimic' not in batch_dict.keys():
+                return ret_dict, tb_dict, disp_dict
+            else:
+                return ret_dict, tb_dict, disp_dict, batch_dict
         else:
             pred_dicts, recall_dicts = self.post_processing(batch_dict)
-            return pred_dicts, recall_dicts
+
+            if 'mimic' not in batch_dict.keys():
+                return pred_dicts, recall_dicts
+            else:
+                return pred_dicts, recall_dicts, batch_dict
+
 
     def get_training_loss(self):
         disp_dict = {}

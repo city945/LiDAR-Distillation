@@ -1,8 +1,3 @@
-# OpenPCDet PyTorch Dataloader and Evaluation Tools for Waymo Open Dataset
-# Reference https://github.com/open-mmlab/OpenPCDet
-# Written by Shaoshuai Shi, Chaoxu Guo
-# All Rights Reserved 2019-2020.
-
 import os
 import pickle
 import copy
@@ -14,12 +9,13 @@ from pathlib import Path
 from ...ops.roiaware_pool3d import roiaware_pool3d_utils
 from ...utils import box_utils, common_utils
 from ..dataset import DatasetTemplate
+import time
 
 
 class WaymoDataset(DatasetTemplate):
-    def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None):
+    def __init__(self, dataset_cfg, class_names, training=True, root_path=None, logger=None, use_ori=False, teacher_tag='default'):
         super().__init__(
-            dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger
+            dataset_cfg=dataset_cfg, class_names=class_names, training=training, root_path=root_path, logger=logger, use_ori=use_ori
         )
         self.data_path = self.root_path / self.dataset_cfg.PROCESSED_DATA_TAG
         self.split = self.dataset_cfg.DATA_SPLIT[self.mode]
@@ -28,6 +24,10 @@ class WaymoDataset(DatasetTemplate):
 
         self.infos = []
         self.include_waymo_data(self.mode)
+
+        self.use_ori = use_ori
+        self.extra_dict = None
+        self.teacher_tag = teacher_tag
 
     def set_split(self, split):
         super().__init__(
@@ -100,7 +100,10 @@ class WaymoDataset(DatasetTemplate):
         return all_sequences_infos
 
     def get_lidar(self, sequence_name, sample_idx):
-        lidar_file = self.data_path / sequence_name / ('%04d.npy' % sample_idx)
+        if self.use_ori:
+            lidar_file = self.root_path / 'modes' / self.teacher_tag / sequence_name / ('%04d.npy' % sample_idx)
+        else:
+            lidar_file = self.data_path / sequence_name / ('%04d.npy' % sample_idx)
         point_features = np.load(lidar_file)  # (N, 7): [x, y, z, intensity, elongation, NLZ_flag]
 
         points_all, NLZ_flag = point_features[:, 0:5], point_features[:, 5]
@@ -115,6 +118,7 @@ class WaymoDataset(DatasetTemplate):
         return len(self.infos)
 
     def __getitem__(self, index):
+        #t1 = time.time()
         if self._merge_all_iters_to_one_epoch:
             index = index % len(self.infos)
 
@@ -123,11 +127,15 @@ class WaymoDataset(DatasetTemplate):
         sequence_name = pc_info['lidar_sequence']
         sample_idx = pc_info['sample_idx']
         points = self.get_lidar(sequence_name, sample_idx)
-
         input_dict = {
             'points': points,
             'frame_id': info['frame_id'],
+            'sample_idx': sample_idx,
+            'index': index
         }
+
+        if self.extra_dict is not None:
+            input_dict.update(self.extra_dict)
 
         if 'annos' in info:
             annos = info['annos']
@@ -144,6 +152,33 @@ class WaymoDataset(DatasetTemplate):
                 'num_points_in_gt': annos.get('num_points_in_gt', None)
             })
 
+            if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+                input_dict['gt_boxes'] = None
+
+            if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+                input_dict['gt_boxes'] = None
+
+            # for debug only
+            # gt_boxes_mask = np.array([n in self.class_names for n in input_dict['gt_names']], dtype=np.bool_)
+            # debug_dict = {'gt_boxes': copy.deepcopy(gt_boxes_lidar[gt_boxes_mask])}
+
+        if self.dataset_cfg.get('FOV_POINTS_ONLY', None):
+            input_dict['points'] = self.extract_fov_data(
+                input_dict['points'], self.dataset_cfg.FOV_DEGREE, self.dataset_cfg.FOV_ANGLE
+            )
+            if input_dict['gt_boxes'] is not None:
+                fov_gt_flag = self.extract_fov_gt(
+                    input_dict['gt_boxes'], self.dataset_cfg.FOV_DEGREE, self.dataset_cfg.FOV_ANGLE
+                )
+                input_dict.update({
+                    'gt_names': input_dict['gt_names'][fov_gt_flag],
+                    'gt_boxes': input_dict['gt_boxes'][fov_gt_flag],
+                    'num_points_in_gt': input_dict['num_points_in_gt'][fov_gt_flag] if input_dict['num_points_in_gt'] is not None else None
+                })
+
+        # load saved pseudo label for unlabeled data
+        if self.dataset_cfg.get('USE_PSEUDO_LABEL', None) and self.training:
+            self.fill_pseudo_labels(input_dict)
         data_dict = self.prepare_data(data_dict=input_dict)
         data_dict['metadata'] = info.get('metadata', info['frame_id'])
         data_dict.pop('num_points_in_gt', None)
@@ -307,7 +342,7 @@ class WaymoDataset(DatasetTemplate):
 
 
 def create_waymo_infos(dataset_cfg, class_names, data_path, save_path,
-                       raw_data_tag='raw_data', processed_data_tag='waymo_processed_data',
+                       raw_data_tag='raw_data', processed_data_tag='modes',
                        workers=multiprocessing.cpu_count()):
     dataset = WaymoDataset(
         dataset_cfg=dataset_cfg, class_names=class_names, root_path=data_path,
@@ -368,5 +403,5 @@ if __name__ == '__main__':
             data_path=ROOT_DIR / 'data' / 'waymo',
             save_path=ROOT_DIR / 'data' / 'waymo',
             raw_data_tag='raw_data',
-            processed_data_tag=dataset_cfg.PROCESSED_DATA_TAG
+            processed_data_tag='modes'
         )

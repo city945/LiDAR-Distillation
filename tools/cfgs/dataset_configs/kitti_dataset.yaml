@@ -15,9 +15,8 @@ INFO_PATH: {
 
 FOV_POINTS_ONLY: True
 
-
 DATA_AUGMENTOR:
-    DISABLE_AUG_LIST: ['placeholder']
+    DISABLE_AUG_LIST: ['gt_sampling']
     AUG_CONFIG_LIST:
         - NAME: gt_sampling
           USE_ROAD_PLANE: True
@@ -46,7 +45,7 @@ DATA_AUGMENTOR:
 
 POINT_FEATURE_ENCODING: {
     encoding_type: absolute_coordinates_encoding,
-    used_feature_list: ['x', 'y', 'z', 'intensity'],
+    used_feature_list: ['x', 'y', 'z'],
     src_feature_list: ['x', 'y', 'z', 'intensity'],
 }
 

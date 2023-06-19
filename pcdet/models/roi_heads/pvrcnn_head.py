@@ -70,7 +70,7 @@ class PVRCNNHead(RoIHeadTemplate):
                     nn.init.constant_(m.bias, 0)
         nn.init.normal_(self.reg_layers[-1].weight, mean=0, std=0.001)
 
-    def roi_grid_pool(self, batch_dict):
+    def roi_grid_pool(self, batch_dict, is_mimic=False):
         """
         Args:
             batch_dict:
@@ -84,7 +84,11 @@ class PVRCNNHead(RoIHeadTemplate):
 
         """
         batch_size = batch_dict['batch_size']
-        rois = batch_dict['rois']
+        if is_mimic:
+            rois = batch_dict['rois_mimic']
+        else:
+            rois = batch_dict['rois']
+
         point_coords = batch_dict['point_coords']
         point_features = batch_dict['point_features']
 
@@ -145,22 +149,42 @@ class PVRCNNHead(RoIHeadTemplate):
         :param input_data: input dict
         :return:
         """
-
-        targets_dict = self.proposal_layer(
-            batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training else 'TEST']
-        )
-        if self.training:
-            targets_dict = self.assign_targets(batch_dict)
-            batch_dict['rois'] = targets_dict['rois']
-            batch_dict['roi_labels'] = targets_dict['roi_labels']
+        if 'mimic' in batch_dict.keys() and not self.training:
+            targets_dict = self.proposal_layer(
+                batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN']
+            )
+            targets_ = self.assign_targets(batch_dict.copy())
+            batch_dict['rois_mimic'] = targets_['rois']
+            targets_dict = self.proposal_layer(
+                batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TEST']
+            )
+        else:
+            targets_dict = self.proposal_layer(
+                batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training else 'TEST']
+            )
+            if self.training:
+                targets_dict = self.assign_targets(batch_dict)
+                batch_dict['rois'] = targets_dict['rois']
+                batch_dict['roi_labels'] = targets_dict['roi_labels']
 
         # RoI aware pooling
+        '''
+        if 'rois_mimic' in batch_dict.keys():
+            pooled_features = self.roi_grid_pool(batch_dict, is_mimic=True)  # (BxN, 6x6x6, C)
+
+            grid_size = self.model_cfg.ROI_GRID_POOL.GRID_SIZE
+            batch_size_rcnn = pooled_features.shape[0]
+            pooled_features = pooled_features.permute(0, 2, 1).\
+                contiguous().view(batch_size_rcnn, -1, grid_size, grid_size, grid_size)  # (BxN, C, 6, 6, 6)
+            batch_dict['pooled_features_mimic'] = pooled_features
+        '''
         pooled_features = self.roi_grid_pool(batch_dict)  # (BxN, 6x6x6, C)
 
         grid_size = self.model_cfg.ROI_GRID_POOL.GRID_SIZE
         batch_size_rcnn = pooled_features.shape[0]
         pooled_features = pooled_features.permute(0, 2, 1).\
             contiguous().view(batch_size_rcnn, -1, grid_size, grid_size, grid_size)  # (BxN, C, 6, 6, 6)
+        batch_dict['pooled_features'] = pooled_features
 
         shared_features = self.shared_fc_layer(pooled_features.view(batch_size_rcnn, -1, 1))
         rcnn_cls = self.cls_layers(shared_features).transpose(1, 2).contiguous().squeeze(dim=1)  # (B, 1 or 2)

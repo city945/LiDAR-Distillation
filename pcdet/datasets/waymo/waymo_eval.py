@@ -1,7 +1,5 @@
 # OpenPCDet PyTorch Dataloader and Evaluation Tools for Waymo Open Dataset
-# Reference https://github.com/open-mmlab/OpenPCDet
-# Written by Shaoshuai Shi, Chaoxu Guo
-# All Rights Reserved 2019-2020.
+# Reference https://github.com/open-mmlab/OpenPCDet, https://github.com/CVMI-Lab/ST3D
 
 
 import numpy as np

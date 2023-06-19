@@ -114,13 +114,23 @@ class SECONDHead(RoIHeadTemplate):
         :param input_data: input dict
         :return:
         """
-        targets_dict = self.proposal_layer(
-            batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training else 'TEST']
-        )
-        if self.training:
-            targets_dict = self.assign_targets(batch_dict)
-            batch_dict['rois'] = targets_dict['rois']
-            batch_dict['roi_labels'] = targets_dict['roi_labels']
+        if 'mimic' in batch_dict.keys() and not self.training:
+            targets_dict = self.proposal_layer(
+                batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN']
+            )
+            targets_ = self.assign_targets(batch_dict.copy())
+            batch_dict['rois_mimic'] = targets_['rois']
+            targets_dict = self.proposal_layer(
+                batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TEST']
+            )
+        else:
+            targets_dict = self.proposal_layer(
+                batch_dict, nms_config=self.model_cfg.NMS_CONFIG['TRAIN' if self.training else 'TEST']
+            )
+            if self.training:
+                targets_dict = self.assign_targets(batch_dict)
+                batch_dict['rois'] = targets_dict['rois']
+                batch_dict['roi_labels'] = targets_dict['roi_labels']
 
         # RoI aware pooling
         pooled_features = self.roi_grid_pool(batch_dict)  # (BxN, C, 7, 7)

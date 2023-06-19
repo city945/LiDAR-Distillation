@@ -16,6 +16,18 @@ class DataProcessor(object):
             cur_processor = getattr(self, cur_cfg.NAME)(config=cur_cfg)
             self.data_processor_queue.append(cur_processor)
 
+    def mask_boxes_outside_length(self, data_dict=None, config=None):
+        if data_dict is None:
+            return partial(self.mask_boxes_outside_length, config=config)
+
+        min_mask = data_dict['gt_boxes'][:, 3] >= config['LENGTH_RANGE'][0]
+        max_mask = data_dict['gt_boxes'][:, 3] <= config['LENGTH_RANGE'][1]
+        mask = min_mask & max_mask
+
+        data_dict['gt_boxes'] = data_dict['gt_boxes'][mask]
+
+        return data_dict
+
     def mask_points_and_boxes_outside_range(self, data_dict=None, config=None):
         if data_dict is None:
             return partial(self.mask_points_and_boxes_outside_range, config=config)
@@ -100,7 +112,10 @@ class DataProcessor(object):
         else:
             choice = np.arange(0, len(points), dtype=np.int32)
             if num_points > len(points):
-                extra_choice = np.random.choice(choice, num_points - len(points), replace=False)
+                if len(points) < num_points - len(points):  ####
+                    extra_choice = np.random.choice(choice, num_points - len(points), replace=True)  ###
+                else:
+                    extra_choice = np.random.choice(choice, num_points - len(points), replace=False)
                 choice = np.concatenate((choice, extra_choice), axis=0)
             np.random.shuffle(choice)
         data_dict['points'] = points[choice]
@@ -122,3 +137,11 @@ class DataProcessor(object):
             data_dict = cur_processor(data_dict=data_dict)
 
         return data_dict
+
+    def eval(self):
+        self.training = False
+        self.mode = 'test'
+
+    def train(self):
+        self.training = True
+        self.mode = 'train'

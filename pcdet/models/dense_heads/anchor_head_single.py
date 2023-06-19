@@ -1,7 +1,7 @@
 import numpy as np
 import torch.nn as nn
-
 from .anchor_head_template import AnchorHeadTemplate
+import pdb
 
 
 class AnchorHeadSingle(AnchorHeadTemplate):
@@ -64,10 +64,12 @@ class AnchorHeadSingle(AnchorHeadTemplate):
             self.forward_ret_dict.update(targets_dict)
 
         if not self.training or self.predict_boxes_when_training:
+            #print(data_dict['frame_id'], cls_preds.shape, data_dict['batch_size'])
+            
             batch_cls_preds, batch_box_preds = self.generate_predicted_boxes(
                 batch_size=data_dict['batch_size'],
                 cls_preds=cls_preds, box_preds=box_preds, dir_cls_preds=dir_cls_preds
-            )
+                )
             data_dict['batch_cls_preds'] = batch_cls_preds
             data_dict['batch_box_preds'] = batch_box_preds
             data_dict['cls_preds_normalized'] = False

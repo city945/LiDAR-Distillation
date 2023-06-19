@@ -9,7 +9,7 @@ from .target_assigner.proposal_target_layer import ProposalTargetLayer
 
 
 class RoIHeadTemplate(nn.Module):
-    def __init__(self, num_class, model_cfg):
+    def __init__(self, num_class, model_cfg, is_loss=True):
         super().__init__()
         self.model_cfg = model_cfg
         self.num_class = num_class
@@ -17,7 +17,8 @@ class RoIHeadTemplate(nn.Module):
             **self.model_cfg.TARGET_CONFIG.get('BOX_CODER_CONFIG', {})
         )
         self.proposal_target_layer = ProposalTargetLayer(roi_sampler_cfg=self.model_cfg.TARGET_CONFIG)
-        self.build_losses(self.model_cfg.LOSS_CONFIG)
+        if is_loss:
+            self.build_losses(self.model_cfg.LOSS_CONFIG)
         self.forward_ret_dict = None
 
     def build_losses(self, losses_cfg):
@@ -84,9 +85,7 @@ class RoIHeadTemplate(nn.Module):
                 raise NotImplementedError
             else:
                 selected, selected_scores = class_agnostic_nms(
-                    box_scores=cur_roi_scores, box_preds=box_preds, nms_config=nms_config
-                )
-
+                        box_scores=cur_roi_scores, box_preds=box_preds, nms_config=nms_config)
             rois[index, :len(selected), :] = box_preds[selected]
             roi_scores[index, :len(selected)] = cur_roi_scores[selected]
             roi_labels[index, :len(selected)] = cur_roi_labels[selected]

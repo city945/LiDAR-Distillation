@@ -60,9 +60,9 @@ class AxisAlignedTargetAssigner(object):
             target_list = []
             for anchor_class_name, anchors in zip(self.anchor_class_names, all_anchors):
                 if cur_gt_classes.shape[0] > 1:
-                    mask = torch.from_numpy(self.class_names[cur_gt_classes.cpu() - 1] == anchor_class_name)
+                    mask = torch.from_numpy(self.class_names[cur_gt_classes.cpu().abs() - 1] == anchor_class_name)
                 else:
-                    mask = torch.tensor([self.class_names[c - 1] == anchor_class_name
+                    mask = torch.tensor([self.class_names[torch.abs(c) - 1] == anchor_class_name
                                          for c in cur_gt_classes], dtype=torch.bool)
 
                 if self.use_multihead:
@@ -95,7 +95,6 @@ class AxisAlignedTargetAssigner(object):
                     'box_reg_targets': [t['box_reg_targets'].view(-1, self.box_coder.code_size) for t in target_list],
                     'reg_weights': [t['reg_weights'].view(-1) for t in target_list]
                 }
-
                 target_dict['box_reg_targets'] = torch.cat(target_dict['box_reg_targets'], dim=0)
                 target_dict['box_cls_labels'] = torch.cat(target_dict['box_cls_labels'], dim=0).view(-1)
                 target_dict['reg_weights'] = torch.cat(target_dict['reg_weights'], dim=0).view(-1)
@@ -193,7 +192,6 @@ class AxisAlignedTargetAssigner(object):
             bbox_targets[fg_inds, :] = self.box_coder.encode_torch(fg_gt_boxes, fg_anchors)
 
         reg_weights = anchors.new_zeros((num_anchors,))
-
         if self.norm_by_num_examples:
             num_examples = (labels >= 0).sum()
             num_examples = num_examples if num_examples > 1.0 else 1.0

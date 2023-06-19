@@ -30,6 +30,9 @@ def cfg_from_list(cfg_list, config):
         except:
             value = v
 
+        if isinstance(value, tuple):
+            value = list(value)
+
         if type(value) != type(d[subkey]) and isinstance(d[subkey], EasyDict):
             key_val_list = value.split(',')
             for src in key_val_list:

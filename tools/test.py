@@ -1,27 +1,29 @@
-import argparse
-import datetime
-import glob
+import _init_path
 import os
-import re
-import time
-from pathlib import Path
-
-import numpy as np
 import torch
 from tensorboardX import SummaryWriter
-
-from eval_utils import eval_utils
-from pcdet.config import cfg, cfg_from_list, cfg_from_yaml_file, log_config_to_file
+import time
+import glob
+import re
+import datetime
+import argparse
+import numpy as np
+from pathlib import Path
+import torch.distributed as dist
 from pcdet.datasets import build_dataloader
 from pcdet.models import build_network
 from pcdet.utils import common_utils
+from pcdet.config import cfg, cfg_from_list, cfg_from_yaml_file, log_config_to_file
+from eval_utils import eval_utils
 
+os.environ['CUDA_VISIBLE_DEVICES']='1,2,3,4,5,6,7,8'
 
 def parse_config():
     parser = argparse.ArgumentParser(description='arg parser')
     parser.add_argument('--cfg_file', type=str, default=None, help='specify the config for training')
 
-    parser.add_argument('--batch_size', type=int, default=None, required=False, help='batch size for training')
+    parser.add_argument('--batch_size', type=int, default=16, required=False, help='batch size for training')
+    parser.add_argument('--epochs', type=int, default=80, required=False, help='Number of epochs to train for')
     parser.add_argument('--workers', type=int, default=4, help='number of workers for dataloader')
     parser.add_argument('--extra_tag', type=str, default='default', help='extra tag for this experiment')
     parser.add_argument('--ckpt', type=str, default=None, help='checkpoint to start from')
@@ -30,7 +32,7 @@ def parse_config():
     parser.add_argument('--local_rank', type=int, default=0, help='local rank for distributed training')
     parser.add_argument('--set', dest='set_cfgs', default=None, nargs=argparse.REMAINDER,
                         help='set extra config keys if needed')
-
+    parser.add_argument('--exp_name', type=str, default='default', help='extra tag for this experiment')
     parser.add_argument('--max_waiting_mins', type=int, default=30, help='max waiting minutes')
     parser.add_argument('--start_epoch', type=int, default=0, help='')
     parser.add_argument('--eval_tag', type=str, default='default', help='eval tag for this experiment')
@@ -39,6 +41,7 @@ def parse_config():
     parser.add_argument('--save_to_file', action='store_true', default=False, help='')
 
     args = parser.parse_args()
+
 
     cfg_from_yaml_file(args.cfg_file, cfg)
     cfg.TAG = Path(args.cfg_file).stem
@@ -60,7 +63,7 @@ def eval_single_ckpt(model, test_loader, args, eval_output_dir, logger, epoch_id
     # start evaluation
     eval_utils.eval_one_epoch(
         cfg, model, test_loader, epoch_id, logger, dist_test=dist_test,
-        result_dir=eval_output_dir, save_to_file=args.save_to_file
+        result_dir=eval_output_dir, save_to_file=args.save_to_file, args=args
     )
 
 
@@ -98,13 +101,17 @@ def repeat_eval_ckpt(model, test_loader, args, eval_output_dir, logger, ckpt_dir
         # check whether there is checkpoint which is not evaluated
         cur_epoch_id, cur_ckpt = get_no_evaluated_ckpt(ckpt_dir, ckpt_record_file, args)
         if cur_epoch_id == -1 or int(float(cur_epoch_id)) < args.start_epoch:
+            if cfg.LOCAL_RANK == 0:
+                tb_log.flush()
+
             wait_second = 30
             if cfg.LOCAL_RANK == 0:
                 print('Wait %s seconds for next check (progress: %.1f / %d minutes): %s \r'
                       % (wait_second, total_time * 1.0 / 60, args.max_waiting_mins, ckpt_dir), end='', flush=True)
             time.sleep(wait_second)
             total_time += 30
-            if total_time > args.max_waiting_mins * 60 and (first_eval is False):
+            #if total_time > args.max_waiting_mins * 60 and (first_eval is False):
+            if total_time > 10:
                 break
             continue
 
@@ -118,7 +125,7 @@ def repeat_eval_ckpt(model, test_loader, args, eval_output_dir, logger, ckpt_dir
         cur_result_dir = eval_output_dir / ('epoch_%s' % cur_epoch_id) / cfg.DATA_CONFIG.DATA_SPLIT['test']
         tb_dict = eval_utils.eval_one_epoch(
             cfg, model, test_loader, cur_epoch_id, logger, dist_test=dist_test,
-            result_dir=cur_result_dir, save_to_file=args.save_to_file
+            result_dir=cur_result_dir, save_to_file=args.save_to_file, args=args
         )
 
         if cfg.LOCAL_RANK == 0:
@@ -142,13 +149,19 @@ def main():
         )
         dist_test = True
 
+    if cfg.LOCAL_RANK == 0:
+        if cfg.DATA_CONFIG.DATASET == 'KittiDataset':
+            print(cfg.ROOT_DIR)
+            os.system('rm {}/data/kitti/training/velodyne'.format(cfg.ROOT_DIR))
+            os.system('ln -s {0}/data/kitti/training/samples/{1} {0}/data/kitti/training/velodyne'.format(cfg.ROOT_DIR, args.extra_tag))
+
     if args.batch_size is None:
         args.batch_size = cfg.OPTIMIZATION.BATCH_SIZE_PER_GPU
     else:
         assert args.batch_size % total_gpus == 0, 'Batch size should match the number of gpus'
         args.batch_size = args.batch_size // total_gpus
 
-    output_dir = cfg.ROOT_DIR / 'output' / cfg.EXP_GROUP_PATH / cfg.TAG / args.extra_tag
+    output_dir = cfg.ROOT_DIR / 'output' / cfg.EXP_GROUP_PATH / cfg.TAG / args.exp_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     eval_output_dir = output_dir / 'eval'
@@ -180,19 +193,30 @@ def main():
 
     ckpt_dir = args.ckpt_dir if args.ckpt_dir is not None else output_dir / 'ckpt'
 
-    test_set, test_loader, sampler = build_dataloader(
-        dataset_cfg=cfg.DATA_CONFIG,
-        class_names=cfg.CLASS_NAMES,
-        batch_size=args.batch_size,
-        dist=dist_test, workers=args.workers, logger=logger, training=False
-    )
+    if cfg.get('DATA_CONFIG_TAR', None):
+        test_set, test_loader, sampler = build_dataloader(
+            dataset_cfg=cfg.DATA_CONFIG_TAR,
+            class_names=cfg.DATA_CONFIG_TAR.CLASS_NAMES,
+            batch_size=args.batch_size,
+            dist=dist_test, workers=args.workers, logger=logger, training=False
+        )
+    else:
+        test_set, test_loader, sampler = build_dataloader(
+            dataset_cfg=cfg.DATA_CONFIG,
+            class_names=cfg.CLASS_NAMES,
+            batch_size=args.batch_size,
+            dist=dist_test, workers=args.workers, logger=logger, training=False
+        )
 
     model = build_network(model_cfg=cfg.MODEL, num_class=len(cfg.CLASS_NAMES), dataset=test_set)
+
     with torch.no_grad():
         if args.eval_all:
-            repeat_eval_ckpt(model, test_loader, args, eval_output_dir, logger, ckpt_dir, dist_test=dist_test)
+            repeat_eval_ckpt(model, test_loader, args, eval_output_dir, logger,
+                             ckpt_dir, dist_test=dist_test)
         else:
-            eval_single_ckpt(model, test_loader, args, eval_output_dir, logger, epoch_id, dist_test=dist_test)
+            eval_single_ckpt(model, test_loader, args, eval_output_dir, logger,
+                             epoch_id, dist_test=dist_test)
 
 
 if __name__ == '__main__':

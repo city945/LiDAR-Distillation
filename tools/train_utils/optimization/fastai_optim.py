@@ -135,13 +135,11 @@ class OptimWrapper():
         if self.true_wd:
             for lr, wd, pg1, pg2 in zip(self._lr, self._wd, self.opt.param_groups[::2], self.opt.param_groups[1::2]):
                 for p in pg1['params']:
-                    # When some parameters are fixed:  Shaoshuai Shi
                     if p.requires_grad is False:
                         continue
                     p.data.mul_(1 - wd * lr)
                 if self.bn_wd:
                     for p in pg2['params']:
-                        # When some parameters are fixed:  Shaoshuai Shi
                         if p.requires_grad is False:
                             continue
                         p.data.mul_(1 - wd * lr)

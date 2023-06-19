@@ -1,9 +1,7 @@
-import pickle
-
 import numpy as np
-
-from ...ops.iou3d_nms import iou3d_nms_utils
+import pickle
 from ...utils import box_utils
+from ...ops.iou3d_nms import iou3d_nms_utils
 
 
 class DataBaseSampler(object):
@@ -196,5 +194,6 @@ class DataBaseSampler(object):
         if total_valid_sampled_dict.__len__() > 0:
             data_dict = self.add_sampled_boxes_to_scene(data_dict, sampled_gt_boxes, total_valid_sampled_dict)
 
-        data_dict.pop('gt_boxes_mask')
+        # data_dict.pop('gt_boxes_mask')
+        data_dict['gt_boxes_mask'] = np.ones(data_dict['gt_boxes'].shape[0], dtype=np.bool_)
         return data_dict
